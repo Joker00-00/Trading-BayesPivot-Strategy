@@ -16,22 +16,22 @@ except ImportError:
 # ==========================================
 # KONFIGURACJA (Zwycięska z Optymalizacji)
 # ==========================================
-START_DATE = "2024-01-01"
-END_DATE = "2024-12-31"
+START_DATE = "2023-01-01"
+END_DATE = "2023-12-31"
 SYMBOL = "BTCUSDT"
-INTERVAL = "1H"
+INTERVAL = "1h"
 
 # Koszty
 SPREAD = 2.0
 
 # Parametry Strategii (Finalne)
-SL_PCT = 0.0200   # SL 2.0%
-B_PCT = 0.0040    # Buffer 0.4%
+SL_PCT = 0.0150   # SL 2.0%
+B_PCT = 0.0020    # Buffer 0.4%
 
 # Parametry Bayesa
-BAYES_WINDOW = 200
+BAYES_WINDOW = 300
 BAYES_MIN_EVENTS = 200
-BAYES_THRESHOLD_LONG = 0.48
+BAYES_THRESHOLD_LONG = 0.52
 BAYES_THRESHOLD_SHORT = 0.52
 
 OUTPUT_DIR = "trades"
