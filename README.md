@@ -28,25 +28,25 @@ python src/pivot_bayes_strategy.py
 Grid Search / Optymalizacja
 Skrypty znajdują się w folderze scripts/. Każdy z nich ma na górze sekcję KONFIGURACJA, gdzie można łatwo zmienić interwał (1h, 15m) i zakresy dat.
 
-Standardowy Grid Search (Wstępny)
+1. Standardowy Grid Search (Wstępny)
 Szybki przegląd szerokich zakresów parametrów.
 
 ```bash
 python scripts/pivot_bayes_grid_search.py
 ```
-Extended Grid Search ("Snajper")
+2. Extended Grid Search ("Snajper")
 Precyzyjne badanie najbardziej zyskownych obszarów (Fine Tuning), zidentyfikowanych we wstępnych testach.
 
 ```bash
 python scripts/pivot_bayes_grid_search_extended.py
 ```
-Dual Grid Search (Window Analysis)
+3. Dual Grid Search (Window Analysis)
 Porównuje wpływ długości okna pamięci Bayesa (np. 100 vs 300 świec) na wyniki.
 
 ```bash
 python scripts/pivot_bayes_grid_dual.py
 ```
-Multi-Parameter Optimization (Heatmaps)
+4. Multi-Parameter Optimization (Heatmaps)
 Generuje zestaw map ciepła (Pairwise Analysis) dla 4 parametrów jednocześnie (SL, Buffer, Bayes Long, Bayes Short), pozwalając znaleźć globalne optimum.
 
 ```bash
