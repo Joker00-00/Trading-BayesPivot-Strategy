@@ -7,6 +7,11 @@ pivot_bayes_v2.py
 pivot_bayes_strategy_old.py
 pivot_bayes_strategy_v2_old.py
 pivot_bayes_grid_search_old.py
+generate_tables_chapter5.py
+mk_phase3_compare.py
+mk_phase4_cross_asset.py
+mk_phase5_mutitf.py
+run_final
 # Dane i wyniki (zostaw lokalnie)
 data/
 trades/

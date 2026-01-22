@@ -31,8 +31,8 @@ except ImportError:
 # ==========================================
 
 SYMBOL = "BTCUSDT"
-START_DATE = "2024-01-01"
-END_DATE = "2024-12-31"
+START_DATE = "2022-01-01"
+END_DATE = "2025-12-31"
 
 SPREAD = 2.0
 WARMUP = 50 

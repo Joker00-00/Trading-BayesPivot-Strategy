@@ -1,21 +1,34 @@
+"""
+pivot_bayes_validation_FINAL.py
+-------------------------------
+Skrypt walidacyjny zgodny z logiką MEAN-REVERSION z pliku pivot_bayes_strategy.py.
+Służy do wygenerowania Tabeli 7 (Walidacja Cross-Asset).
+"""
 from __future__ import annotations
 import numpy as np
 import pandas as pd
 from collections import deque
-import os, sys
+import os
 
-# ---------------------------------------------------------
+# ==========================================
 # KONFIGURACJA
-# ---------------------------------------------------------
+# ==========================================
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT"]
 START_DATE = "2022-01-01"
 END_DATE = "2025-12-31"
 
-# Parametry wybrane w Grid Search (z Tabeli 6)
-BEST_SL = 0.005          # 0.5% (Zwycięzca RAW i bezpieczny Bayes)
-BEST_BAYES_THRESH = 0.50 # Najlepszy próg Bayesa
-BAYES_WINDOW = 200       # Stałe okno
+# Parametry zwycięskie (z Grid Search dla BTC)
+BEST_SL = 0.005           # 0.5%
+BEST_BAYES_THRESH = 0.50  # Próg decyzyjny
 
+# Stałe strategii (zgodne z pivot_bayes_strategy.py)
+BAYES_WINDOW = 200
+BAYES_MIN_EVENTS = 50
+BPCT = 0.0040        # Bufor 0.4%
+PRIOR_ALPHA = 1.0
+PRIOR_BETA = 1.0
+
+# Koszty transakcyjne (Spread)
 SPREAD_DICT = {
     "BTCUSDT": 2.0,
     "ETHUSDT": 0.20,
@@ -23,165 +36,202 @@ SPREAD_DICT = {
     "SOLUSDT": 0.03
 }
 
-# ---------------------------------------------------------
-# IMPORT LOADERA
-# ---------------------------------------------------------
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-if ROOT not in sys.path:
-    sys.path.insert(0, ROOT)
+# ==========================================
+# LOADER DANYCH
+# ==========================================
+def load_data_simple(symbol):
+    # Próba znalezienia danych w typowych lokalizacjach
+    paths = [
+        os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data', 'raw', symbol, '1h')),
+        f"data/raw/{symbol}/1h",
+        f"../data/raw/{symbol}/1h"
+    ]
+    
+    root_dir = None
+    for p in paths:
+        if os.path.exists(p):
+            root_dir = p
+            break
+            
+    if not root_dir:
+        print(f"[WARN] Nie znaleziono danych dla {symbol}")
+        return pd.DataFrame()
 
-try:
-    from src.data_loader import load_bars
-except ImportError:
-    print("Błąd: Brak pliku data_loader.py w src/")
-    exit()
+    all_files = sorted([f for f in os.listdir(root_dir) if f.endswith(".csv")])
+    dfs = []
+    valid_years = ["2022", "2023", "2024", "2025"]
+    
+    print(f"Wczytywanie {symbol}...")
+    for f in all_files:
+        if any(y in f for y in valid_years):
+            path = os.path.join(root_dir, f)
+            try:
+                df_temp = pd.read_csv(path, header=0)
+                if df_temp.shape[1] >= 6:
+                    df_temp = df_temp.iloc[:, :6]
+                    df_temp.columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+                    dfs.append(df_temp)
+            except: pass
+            
+    if not dfs: return pd.DataFrame()
+    
+    df = pd.concat(dfs, ignore_index=True)
+    
+    # Konwersja daty
+    try:
+        if df['timestamp'].iloc[0] > 2000000000:
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        else:
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
+    except: pass
+    
+    df = df.set_index('timestamp').sort_index()
+    # Zakres dat
+    df = df.loc[START_DATE:END_DATE]
+    
+    # Konwersja na float
+    for col in ['open', 'high', 'low', 'close']: 
+        df[col] = df[col].astype(float)
+        
+    return df
 
-# ---------------------------------------------------------
-# FUNKCJA SYMULACJI (Skrócona)
-# ---------------------------------------------------------
-def run_strategy(df, symbol, sl_pct, bayes_threshold):
+# ==========================================
+# STRATEGIA (MEAN REVERSION)
+# ==========================================
+def run_strategy_mean_reversion(df, symbol, sl_pct, bayes_thresh):
+    if df.empty: return 0,0,0,0
+
+    opens = df['open'].values
     highs = df['high'].values
     lows = df['low'].values
     closes = df['close'].values
     n = len(df)
     
+    history_s1 = deque(maxlen=BAYES_WINDOW) # Dla Longów (S1)
+    history_r1 = deque(maxlen=BAYES_WINDOW) # Dla Shortów (R1)
+    
     equity = 0.0
-    max_equity = 0.0
-    drawdown = 0.0
+    max_equity = -99999999.0
     max_drawdown = 0.0
-    trades = 0
-    wins = 0
+    trades_count = 0
+    wins_count = 0
     
-    history_s1 = deque(maxlen=BAYES_WINDOW)
-    history_r1 = deque(maxlen=BAYES_WINDOW)
-    min_events = 10
     spread = SPREAD_DICT.get(symbol, 0.01)
-    
+
+    # Pętla po świecach
     for i in range(1, n):
+        # i-1: Dane historyczne (Sygnał generowany na zamknięciu poprzedniej świecy)
         h_prev, l_prev, c_prev = highs[i-1], lows[i-1], closes[i-1]
-        h_curr, l_curr, c_curr = highs[i], lows[i], closes[i]
         
+        # i: Dane bieżące (Egzekucja na Open obecnej świecy)
+        o_curr = opens[i]
+        h_curr, l_curr, c_curr = highs[i], lows[i], closes[i]
+
         # Pivoty
         pp = (h_prev + l_prev + c_prev) / 3.0
         r1 = 2 * pp - l_prev
         s1 = 2 * pp - h_prev
         
-        # Warunki (Cena przecina poziom)
-        event_short = (c_prev < r1) and (c_curr > r1) # Przebicie R1 w górę (fałszywe?) -> Short? (W oryginale strategia pivotowa gra na odbicie/przełamanie, tu upraszczamy logikę zgodną z gridem)
-        # W gridzie mieliśmy: Short gdy cena < R1 (odbicie w dół) lub przebicie. 
-        # Zgodnie z Twoim plikiem strategy: Short jest gdy c_prev > R1 i c_curr < R1 (przebicie w dół) - SPRAWDŹMY LOGIKĘ Z PLIKU 58
-        
-        # LOGIKA Z PLIKU 58 (pivot_bayes_grid_search.py):
-        # event_short = (c_prev > R1) and (current_b < R1) -> Przebicie w dół (Breakout Short? A może Reversal?)
-        # W Twoim kodzie było: event_short = (c_prev > R1) and (c_curr < R1)
-        
-        # Odtwarzam 1:1 logikę z gridu:
-        # PP, R1, S1 liczone z (i-1)
-        # current_b = c_curr (cena z teraz)
-        # c_prev (cena z poprzedniej świecy - ale w pętli 'i' to jest close[i-1])
-        
-        # W pliku 58: c_prev to close[i-1]. current_b to close[i].
-        # event_short = (c_prev > R1) and (c_curr < R1)
-        # event_long  = (c_prev < S1) and (c_curr > S1)
-        
-        is_short_sig = (c_prev > r1) and (c_curr < r1)
-        is_long_sig  = (c_prev < s1) and (c_curr > s1)
-        
-        # Bayes Probability
-        p_r1 = np.mean(history_r1) if len(history_r1) >= min_events else 0.5
-        p_s1 = np.mean(history_s1) if len(history_s1) >= min_events else 0.5
-        
-        # Decyzja
-        trade = None
-        
-        # RAW (bayes_threshold == 0.0) -> Wchodzimy zawsze
-        # BAYES -> Wchodzimy gdy prob >= threshold
-        
-        if is_short_sig:
-            if bayes_threshold == 0.0 or p_r1 >= bayes_threshold: # Shorty miały BAYES_THRESHOLD_SHORT=0.60 stałe, ale tu testujemy "Wpływ filtru".
-                # UWAGA: W Gridzie Shorty miały stały próg 0.60, a Longi zmienny.
-                # Żeby porównanie było uczciwe "RAW vs BAYES", w RAW wyłączamy oba (0.0).
-                # W wariancie BAYES włączamy oba? Czy tylko Long?
-                # Zgodnie z Gridem: Shorty zawsze były filtrowane (0.60) albo nie?
-                # W pliku 58: "if (event_short and p_r1 > 0.60) ... elif (event_long and p_s1 > bayes_threshold)"
-                # Czyli Shorty zawsze miały filtr 0.60?
-                # Nie, w RAW (benchmarku) filtr powinien być wyłączony.
-                
-                # Uprośćmy na potrzeby walidacji:
-                # RAW = p_r1 > 0.0 (Bierzemy wszystko)
-                # BAYES = p_r1 > 0.50 (Bierzemy tylko pewne)
-                 trade = 'SHORT'
-
-        elif is_long_sig:
-             if bayes_threshold == 0.0 or p_s1 >= bayes_threshold:
-                 trade = 'LONG'
-
-        # Obliczenie wyniku (uproszczone jak w gridzie)
+        current_b = c_prev * BPCT
         current_sl = c_prev * sl_pct
         
-        # Wynik dla Shorta
-        raw_pnl_short = c_prev - c_curr
-        is_sl_short = (h_curr - c_prev) > current_sl
+        # LOGIKA MEAN-REVERSION (Zgodna z pivot_bayes_strategy.py)
+        # Short: Cena jest wysoko (powyżej R1 - bufor) -> Gramy na powrót
+        event_short = c_prev > (r1 - current_b)
+        
+        # Long: Cena jest nisko (poniżej S1 + bufor) -> Gramy na odbicie
+        event_long  = c_prev < (s1 + current_b)
+        
+        # Wykluczenie sprzecznych
+        if event_short and event_long:
+            event_short, event_long = False, False
+
+        # BAYES UPDATE (Obliczamy prawdopodobieństwo sukcesu)
+        n_r1 = len(history_r1)
+        k_r1 = sum(history_r1)
+        if n_r1 >= BAYES_MIN_EVENTS:
+            p_r1 = (PRIOR_ALPHA + k_r1) / (PRIOR_ALPHA + PRIOR_BETA + n_r1)
+        else:
+            p_r1 = 0.5 # Neutralne, póki nie mamy próbki
+            
+        n_s1 = len(history_s1)
+        k_s1 = sum(history_s1)
+        if n_s1 >= BAYES_MIN_EVENTS:
+            p_s1 = (PRIOR_ALPHA + k_s1) / (PRIOR_ALPHA + PRIOR_BETA + n_s1)
+        else:
+            p_s1 = 0.5
+            
+        # DECYZJA
+        trade_dir = None
+        
+        # Filtr Bayesa
+        # Jeśli bayes_thresh > 0, filtrujemy. Jeśli 0.0 (RAW), bierzemy wszystko.
+        if event_short:
+             if bayes_thresh == 0.0 or p_r1 > bayes_thresh:
+                 trade_dir = 'SHORT'
+                 
+        elif event_long:
+             if bayes_thresh == 0.0 or p_s1 > bayes_thresh:
+                 trade_dir = 'LONG'
+            
+        # OBLICZENIE PNL (Intraday: Entry=Open, Exit=Close)
+        
+        # Short PnL
+        raw_pnl_short = o_curr - c_curr # Zysk, gdy cena spada
+        is_sl_short = h_curr > (o_curr + current_sl) # Czy w trakcie świecy dotknęliśmy SL?
         real_pnl_short = -current_sl - spread if is_sl_short else raw_pnl_short - spread
         
-        # Wynik dla Longa
-        raw_pnl_long = c_curr - c_prev
-        is_sl_long = (c_prev - l_curr) > current_sl
+        # Long PnL
+        raw_pnl_long = c_curr - o_curr # Zysk, gdy cena rośnie
+        is_sl_long = l_curr < (o_curr - current_sl)
         real_pnl_long = -current_sl - spread if is_sl_long else raw_pnl_long - spread
         
-        # Aktualizacja historii Bayesa (czy sygnał był trafny?)
-        # Trafny = real_pnl > 0
-        if is_short_sig:
+        # UCZENIE (FEEDBACK LOOP)
+        # Bayes uczy się ZAWSZE, gdy wystąpił sygnał (nawet jeśli nie zagraliśmy)
+        # To pozwala mu oceniać "co by było gdyby"
+        if event_short:
             history_r1.append(1 if real_pnl_short > 0 else 0)
-        if is_long_sig:
+        if event_long:
             history_s1.append(1 if real_pnl_long > 0 else 0)
             
-        # Realizacja transakcji
-        if trade == 'SHORT':
-            pnl = real_pnl_short
-            equity += pnl
-            trades += 1
-            if pnl > 0: wins += 1
-        elif trade == 'LONG':
-            pnl = real_pnl_long
-            equity += pnl
-            trades += 1
-            if pnl > 0: wins += 1
+        # EGZEKUCJA (Tylko jeśli trade_dir != None)
+        if trade_dir == 'SHORT':
+            equity += real_pnl_short
+            trades_count += 1
+            if real_pnl_short > 0: wins_count += 1
+        elif trade_dir == 'LONG':
+            equity += real_pnl_long
+            trades_count += 1
+            if real_pnl_long > 0: wins_count += 1
             
-        # Max DD
+        # Max DD tracking
         if equity > max_equity:
             max_equity = equity
         dd = max_equity - equity
         if dd > max_drawdown:
             max_drawdown = dd
 
-    return equity, max_drawdown, trades, (wins/trades*100 if trades>0 else 0)
+    return equity, max_drawdown, trades_count, (wins_count/trades_count*100 if trades_count>0 else 0)
 
-# ---------------------------------------------------------
-# START
-# ---------------------------------------------------------
-print(f"{'SYMBOL':<10} | {'MODE':<6} | {'PROFIT':>10} | {'DD':>10} | {'TRADES':>6}")
-print("-" * 55)
-
-results = []
+# ==========================================
+# URUCHOMIENIE
+# ==========================================
+print(f"{'SYMBOL':<10} | {'MODE':<6} | {'PROFIT':>10} | {'DD':>10} | {'TRADES':>6} | {'WIN%':>5}")
+print("-" * 65)
 
 for symbol in SYMBOLS:
-    # 1. Pobierz dane
-    sy, sm = int(START_DATE[0:4]), int(START_DATE[5:7])
-    ey, em = int(END_DATE[0:4]), int(END_DATE[5:7])
-    df = load_bars(symbol, "1h", sy, sm, ey, em)
-    df = df.loc[START_DATE:END_DATE]
-    
+    df = load_data_simple(symbol)
     if df.empty:
-        print(f"Brak danych dla {symbol}")
+        # Pusty wiersz, jeśli brak danych (dla testu)
+        print(f"{symbol:<10} | NO DATA")
         continue
         
-    # 2. Test RAW (Bayes=0.0)
-    p_raw, dd_raw, t_raw, w_raw = run_strategy(df, symbol, BEST_SL, 0.0)
+    # RAW (Bayes = 0.0 -> Wszystkie sygnały wchodzą)
+    p_raw, dd_raw, t_raw, w_raw = run_strategy_mean_reversion(df, symbol, BEST_SL, 0.0)
     
-    # 3. Test BAYES (Bayes=0.50)
-    p_bay, dd_bay, t_bay, w_bay = run_strategy(df, symbol, BEST_SL, BEST_BAYES_THRESH)
+    # BAYES (Bayes = 0.50 -> Filtrowanie poniżej 50%)
+    p_bay, dd_bay, t_bay, w_bay = run_strategy_mean_reversion(df, symbol, BEST_SL, BEST_BAYES_THRESH)
     
-    print(f"{symbol:<10} | RAW    | {p_raw:10.2f} | {dd_raw:10.2f} | {t_raw:6}")
-    print(f"{symbol:<10} | BAYES  | {p_bay:10.2f} | {dd_bay:10.2f} | {t_bay:6}")
-    print("-" * 55)
+    print(f"{symbol:<10} | RAW    | {p_raw:10.2f} | {dd_raw:10.2f} | {t_raw:6} | {w_raw:5.1f}%")
+    print(f"{symbol:<10} | BAYES  | {p_bay:10.2f} | {dd_bay:10.2f} | {t_bay:6} | {w_bay:5.1f}%")
+    print("-" * 65)
