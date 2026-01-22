@@ -11,8 +11,8 @@ generate_tables_chapter5.py
 mk_phase3_compare.py
 mk_phase4_cross_asset.py
 mk_phase5_mutitf.py
-run_final.py
-pivot_bayes_validation.py
+src/run_final.py
+scripts/pivot_bayes_validation.py
 # Dane i wyniki (zostaw lokalnie)
 data/
 trades/
