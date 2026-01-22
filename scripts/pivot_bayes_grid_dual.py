@@ -31,8 +31,8 @@ except ImportError:
 # ==========================================
 
 SYMBOL = "BTCUSDT"
-START_DATE = "2024-01-01"
-END_DATE = "2024-12-31"
+START_DATE = "2022-01-01"
+END_DATE = "2025-12-31"
 
 SPREAD = 2.0
 B_PCT = 0.0020            # Stały bufor 0.2%
@@ -50,10 +50,10 @@ PRIOR_BETA = 1.0
 WINDOW_SCENARIOS = [100, 300] 
 
 # 2. Zakres Stop Loss
-SL_RANGE = [0.005, 0.010, 0.015, 0.020, 0.025, 0.030]
+SL_RANGE = [0.005, 0.010, 0.015, 0.020, 0.025, 0.030, 0.035, 0.040, 0.045, 0.050]
 
 # 3. Zakres Bayesa Long
-BAYES_LONG_RANGE = [0.49, 0.50, 0.51, 0.52, 0.53, 0.54, 0.55]
+BAYES_LONG_RANGE = [0.49, 0.50, 0.51, 0.52, 0.53, 0.54, 0.55, 0.56, 0.57, 0.58, 0.59, 0.60]
 
 # ==========================================
 # SILNIK (Z obsługą zmiennego okna)
